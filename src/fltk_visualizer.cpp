@@ -37,6 +37,64 @@ struct PathLayer {
     std::vector<Point> explored;
 };
 
+class PlotWidget : public Fl_Widget {
+public:
+    PlotWidget(int x, int y, int w, int h) : Fl_Widget(x,y,w,h) {}
+    void setSamples(const std::vector<Stats::ProgressSample> &s) { samples = s; redraw(); }
+    void draw() override {
+        fl_push_clip(x(), y(), w(), h());
+        fl_color(FL_WHITE);
+        fl_rectf(x(), y(), w(), h());
+        fl_color(FL_BLACK);
+        fl_rect(x(), y(), w(), h());
+        if (samples.empty()) { fl_pop_clip(); return; }
+        // find ranges
+        double maxTime = samples.back().time_ms;
+        if (maxTime < 0.001) maxTime = 0.001;
+        int maxNodes = 1;
+        int maxOpen = 1;
+        for (auto &samp : samples) { if (samp.nodes_expanded > maxNodes) maxNodes = samp.nodes_expanded; if (samp.open_size > maxOpen) maxOpen = samp.open_size; }
+        const int pad = 30;
+        const int px = x()+pad, py = y()+pad, pw = w()-pad*2-30, ph = h()-pad*2;
+        // draw nodes_expanded curve
+        fl_color(FL_BLUE);
+        fl_line_style(FL_SOLID, 2);
+        for (size_t i = 1; i < samples.size(); ++i) {
+            int x1 = px + static_cast<int>((samples[i-1].time_ms / maxTime) * pw);
+            int y1 = py + ph - static_cast<int>((double)samples[i-1].nodes_expanded / maxNodes * ph);
+            int x2 = px + static_cast<int>((samples[i].time_ms / maxTime) * pw);
+            int y2 = py + ph - static_cast<int>((double)samples[i].nodes_expanded / maxNodes * ph);
+            fl_line(x1, y1, x2, y2);
+        }
+        // draw open_size curve (dashed)
+        fl_color(fl_rgb_color(200,80,80));
+        fl_line_style(FL_DASH, 2);
+        for (size_t i = 1; i < samples.size(); ++i) {
+            int x1 = px + static_cast<int>((samples[i-1].time_ms / maxTime) * pw);
+            int y1 = py + ph - static_cast<int>((double)samples[i-1].open_size / maxOpen * ph);
+            int x2 = px + static_cast<int>((samples[i].time_ms / maxTime) * pw);
+            int y2 = py + ph - static_cast<int>((double)samples[i].open_size / maxOpen * ph);
+            fl_line(x1, y1, x2, y2);
+        }
+        // draw legend
+        fl_line_style(0);
+        fl_color(FL_BLUE);
+        fl_line_style(FL_SOLID, 2);
+        fl_line(x()+pad, y()+10, x()+pad+15, y()+10);
+        fl_color(FL_BLACK);
+        fl_draw("nodes_expanded", x()+pad+20, y()+14);
+        fl_color(fl_rgb_color(200,80,80));
+        fl_line_style(FL_DASH, 2);
+        fl_line(x()+pad+140, y()+10, x()+pad+155, y()+10);
+        fl_color(FL_BLACK);
+        fl_draw("open_size", x()+pad+160, y()+14);
+        fl_line_style(0);
+        fl_pop_clip();
+    }
+private:
+    std::vector<Stats::ProgressSample> samples;
+};
+
 class MapCanvas : public Fl_Widget {
 public:
     MapCanvas(int x, int y, int w, int h) : Fl_Widget(x, y, w, h) {}
@@ -112,12 +170,16 @@ public:
                 for (const auto &explored : layer.explored) {
                     const int px = offsetX + explored.x * cell;
                     const int py = offsetY + explored.y * cell;
-                    fl_color(layer.explored_color);
-                    fl_line_style(FL_SOLID, 1);
-                    fl_rect(px + 2, py + 2, std::max(1, cell - 4), std::max(1, cell - 4));
-                    if (cell >= 10) {
-                        fl_point(px + cell / 2, py + cell / 2);
+                    // fill with darker shade of the explored color
+                    Fl_Color darkExplored = fl_darker(layer.explored_color);
+                    if (cell >= 6) {
+                        fl_color(darkExplored);
+                        fl_rectf(px + 1, py + 1, cell - 2, cell - 2);
                     }
+                    // draw border
+                    fl_color(darkExplored);
+                    fl_line_style(FL_SOLID, 2);
+                    fl_rect(px + 1, py + 1, std::max(1, cell - 2), std::max(1, cell - 2));
                 }
             }
 
@@ -155,13 +217,18 @@ private:
     std::vector<PathLayer> layers;
 };
 
-MapCanvas *g_canvas = nullptr;
+MapCanvas *g_left_canvas = nullptr;
+MapCanvas *g_right_canvas = nullptr;
+PlotWidget *g_left_plot = nullptr;
+PlotWidget *g_right_plot = nullptr;
 Fl_Int_Input *g_start_x = nullptr;
 Fl_Int_Input *g_start_y = nullptr;
 Fl_Int_Input *g_target_x = nullptr;
 Fl_Int_Input *g_target_y = nullptr;
 Fl_Float_Input *g_turn_penalty_input = nullptr;
-Fl_Multiline_Output *g_stats = nullptr;
+Fl_Multiline_Output *g_left_stats_box = nullptr;
+Fl_Multiline_Output *g_right_stats_box = nullptr;
+Fl_Box *g_compare_box = nullptr;
 bool g_show_explored = true;
 
 std::string defaultMapPath() {
@@ -173,8 +240,8 @@ std::string randomMapPath() {
 }
 
 void setStats(const std::string &text) {
-    if (g_stats) {
-        g_stats->value(text.c_str());
+    if (g_compare_box) {
+        g_compare_box->label(text.c_str());
     }
 }
 
@@ -279,7 +346,7 @@ bool writeRandomMapToFile(int width, int height, double obstacleRate, unsigned s
 }
 
 void loadMapIntoCanvas(const std::string &path) {
-    if (!g_canvas) {
+    if (!g_left_canvas && !g_right_canvas) {
         return;
     }
 
@@ -291,9 +358,16 @@ void loadMapIntoCanvas(const std::string &path) {
 
     const Point start{0, 0};
     const Point target{map.width() - 1, map.height() - 1};
-    g_canvas->setMap(map);
-    g_canvas->setEndpoints(start, target);
-    g_canvas->clearLayers();
+    if (g_left_canvas) {
+        g_left_canvas->setMap(map);
+        g_left_canvas->setEndpoints(start, target);
+        g_left_canvas->clearLayers();
+    }
+    if (g_right_canvas) {
+        g_right_canvas->setMap(map);
+        g_right_canvas->setEndpoints(start, target);
+        g_right_canvas->clearLayers();
+    }
     syncEndpointInputs(start, target);
 
     std::ostringstream oss;
@@ -305,53 +379,14 @@ void loadMapIntoCanvas(const std::string &path) {
 }
 
 template <typename PlannerT>
-bool runPlanner(const char *name, Fl_Color color, Fl_Color exploredColor, std::vector<PathLayer> &layers) {
-    if (!g_canvas) {
-        return false;
-    }
-
-    float currentTurnPenalty = turnPenalty();
-    updateTurnPenaltyFromInput(currentTurnPenalty);
-
-    const Map &map = g_canvas->getMap();
-    if (map.width() == 0 || map.height() == 0) {
-        fl_message("Please load a map first.");
-        return false;
-    }
-
-    Point start;
-    Point target;
-    if (!getEndpoints(start, target)) {
-        fl_message("Start/target inputs must be integers.");
-        return false;
-    }
-
-    if (start.x < 0 || start.x >= map.width() || start.y < 0 || start.y >= map.height() ||
-        target.x < 0 || target.x >= map.width() || target.y < 0 || target.y >= map.height()) {
-        fl_message("Start/target are outside the map bounds.");
-        return false;
-    }
-
+std::pair<PathLayer, Stats> runPlannerWithStats(const Map &map, const Point &start, const Point &target, const char *name, Fl_Color color, Fl_Color exploredColor) {
     PlannerT planner;
     const bool ok = planner.plan(map, start, target);
     const auto path = planner.getPath();
     const auto stats = planner.getStats();
-    layers.push_back({name, color, exploredColor, path, stats.explored_cells});
-    g_canvas->setEndpoints(start, target);
-    g_canvas->setLayers(layers);
-
-    std::ostringstream oss;
-    oss.setf(std::ios::fixed);
-    oss.precision(3);
-    oss << name << "\n"
-        << "success: " << (ok ? "true" : "false") << "\n"
-        << "time_ms: " << planner.getStats().time_ms << "\n"
-        << "nodes_expanded: " << planner.getStats().nodes_expanded << "\n"
-        << "path_cost: " << planner.getStats().path_cost << "\n"
-        << "explored_cells: " << stats.explored_cells.size() << "\n"
-        << "turn_penalty: " << currentTurnPenalty;
-    setStats(oss.str());
-    return ok;
+    PathLayer layer{name, color, exploredColor, path, stats.explored_cells};
+    (void)ok;
+    return {layer, stats};
 }
 
 void load_cb(Fl_Widget *, void *) {
@@ -362,32 +397,108 @@ void load_cb(Fl_Widget *, void *) {
 }
 
 void run_dijkstra_cb(Fl_Widget *, void *) {
-    std::vector<PathLayer> layers;
-    runPlanner<DijkstraPlanner>("Dijkstra", FL_BLUE, fl_rgb_color(180, 210, 255), layers);
+    if (!g_left_canvas) return;
+    const Map &map = g_left_canvas->getMap();
+    if (map.width() == 0) { fl_message("Please load a map first."); return; }
+    Point start, target;
+    if (!getEndpoints(start, target)) { fl_message("Start/target inputs must be integers."); return; }
+    auto res = runPlannerWithStats<DijkstraPlanner>(map, start, target, "Dijkstra", FL_BLUE, fl_rgb_color(180,210,255));
+    std::vector<PathLayer> layers{res.first};
+    g_left_canvas->setEndpoints(start, target);
+    g_left_canvas->setLayers(layers);
+    if (g_left_plot) g_left_plot->setSamples(res.second.samples);
+    if (g_left_stats_box) {
+        std::ostringstream oss; oss.setf(std::ios::fixed); oss.precision(3);
+        oss << "Dijkstra\n";
+        oss << "success: " << (res.second.success?"true":"false") << "\n";
+        oss << "time_ms: " << res.second.time_ms << "\n";
+        oss << "nodes_expanded: " << res.second.nodes_expanded << "\n";
+        oss << "path_cost: " << res.second.path_cost << "\n";
+        oss << "max_open: " << res.second.max_open_size << "\n";
+        g_left_stats_box->value(oss.str().c_str());
+    }
 }
 
 void run_astar_cb(Fl_Widget *, void *) {
-    std::vector<PathLayer> layers;
-    runPlanner<AStarPlanner>("A*", fl_rgb_color(255, 165, 0), fl_rgb_color(255, 225, 160), layers);
+    if (!g_right_canvas) return;
+    const Map &map = g_right_canvas->getMap();
+    if (map.width() == 0) { fl_message("Please load a map first."); return; }
+    Point start, target;
+    if (!getEndpoints(start, target)) { fl_message("Start/target inputs must be integers."); return; }
+    auto res = runPlannerWithStats<AStarPlanner>(map, start, target, "A*", fl_rgb_color(255,165,0), fl_rgb_color(255,225,160));
+    std::vector<PathLayer> layers{res.first};
+    g_right_canvas->setEndpoints(start, target);
+    g_right_canvas->setLayers(layers);
+    if (g_right_plot) g_right_plot->setSamples(res.second.samples);
+    if (g_right_stats_box) {
+        std::ostringstream oss; oss.setf(std::ios::fixed); oss.precision(3);
+        oss << "A*\n";
+        oss << "success: " << (res.second.success?"true":"false") << "\n";
+        oss << "time_ms: " << res.second.time_ms << "\n";
+        oss << "nodes_expanded: " << res.second.nodes_expanded << "\n";
+        oss << "path_cost: " << res.second.path_cost << "\n";
+        oss << "max_open: " << res.second.max_open_size << "\n";
+        g_right_stats_box->value(oss.str().c_str());
+    }
 }
 
 void run_both_cb(Fl_Widget *, void *) {
-    std::vector<PathLayer> layers;
-    const bool dijkstra_ok = runPlanner<DijkstraPlanner>("Dijkstra", FL_BLUE, fl_rgb_color(180, 210, 255), layers);
-    const bool astar_ok = runPlanner<AStarPlanner>("A*", fl_rgb_color(255, 165, 0), fl_rgb_color(255, 225, 160), layers);
+    if (!g_left_canvas || !g_right_canvas) return;
+    const Map &map = g_left_canvas->getMap();
+    if (map.width() == 0) { fl_message("Please load a map first."); return; }
+    Point start, target;
+    if (!getEndpoints(start, target)) { fl_message("Start/target inputs must be integers."); return; }
+    auto leftRes = runPlannerWithStats<DijkstraPlanner>(map, start, target, "Dijkstra", FL_BLUE, fl_rgb_color(180,210,255));
+    auto rightRes = runPlannerWithStats<AStarPlanner>(map, start, target, "A*", fl_rgb_color(255,165,0), fl_rgb_color(255,225,160));
 
-    std::ostringstream oss;
-    oss << "Comparison finished\n"
-        << "Dijkstra: " << (dijkstra_ok ? "success" : "failed") << "\n"
-        << "A*: " << (astar_ok ? "success" : "failed");
-    setStats(oss.str());
+    g_left_canvas->setEndpoints(start, target);
+    g_right_canvas->setEndpoints(start, target);
+    g_left_canvas->setLayers(std::vector<PathLayer>{leftRes.first});
+    g_right_canvas->setLayers(std::vector<PathLayer>{rightRes.first});
+    if (g_left_plot) g_left_plot->setSamples(leftRes.second.samples);
+    if (g_right_plot) g_right_plot->setSamples(rightRes.second.samples);
+    if (g_left_stats_box) {
+        std::ostringstream oss; oss.setf(std::ios::fixed); oss.precision(3);
+        oss << "Dijkstra\n";
+        oss << "success: " << (leftRes.second.success?"true":"false") << "\n";
+        oss << "time_ms: " << leftRes.second.time_ms << "\n";
+        oss << "nodes_expanded: " << leftRes.second.nodes_expanded << "\n";
+        oss << "path_cost: " << leftRes.second.path_cost << "\n";
+        oss << "max_open: " << leftRes.second.max_open_size << "\n";
+        g_left_stats_box->value(oss.str().c_str());
+        // highlight slower algorithm by time
+        if (leftRes.second.time_ms > rightRes.second.time_ms) {
+            g_left_stats_box->textcolor(FL_RED);
+        } else {
+            g_left_stats_box->textcolor(FL_BLACK);
+        }
+    }
+    if (g_right_stats_box) {
+        std::ostringstream oss; oss.setf(std::ios::fixed); oss.precision(3);
+        oss << "A*\n";
+        oss << "success: " << (rightRes.second.success?"true":"false") << "\n";
+        oss << "time_ms: " << rightRes.second.time_ms << "\n";
+        oss << "nodes_expanded: " << rightRes.second.nodes_expanded << "\n";
+        oss << "path_cost: " << rightRes.second.path_cost << "\n";
+        oss << "max_open: " << rightRes.second.max_open_size << "\n";
+        g_right_stats_box->value(oss.str().c_str());
+        // highlight slower algorithm by time
+        if (rightRes.second.time_ms > leftRes.second.time_ms) {
+            g_right_stats_box->textcolor(FL_RED);
+        } else {
+            g_right_stats_box->textcolor(FL_BLACK);
+        }
+    }
+    setStats("Comparison finished");
 }
 
 void clear_cb(Fl_Widget *, void *) {
-    if (!g_canvas) {
-        return;
-    }
-    g_canvas->clearLayers();
+    if (g_left_canvas) g_left_canvas->clearLayers();
+    if (g_right_canvas) g_right_canvas->clearLayers();
+    if (g_left_plot) g_left_plot->setSamples({});
+    if (g_right_plot) g_right_plot->setSamples({});
+    if (g_left_stats_box) g_left_stats_box->value("");
+    if (g_right_stats_box) g_right_stats_box->value("");
     setStats("Paths cleared.");
 }
 
@@ -399,8 +510,8 @@ void random_map_cb(Fl_Widget *, void *) {
     int width = 40;
     int height = 40;
 
-    if (g_canvas) {
-        const Map &current = g_canvas->getMap();
+    if (g_left_canvas) {
+        const Map &current = g_left_canvas->getMap();
         if (current.width() > 0 && current.height() > 0) {
             width = current.width();
             height = current.height();
@@ -428,9 +539,8 @@ void random_map_cb(Fl_Widget *, void *) {
 void show_explored_cb(Fl_Widget *widget, void *) {
     auto *toggle = static_cast<Fl_Check_Button *>(widget);
     g_show_explored = toggle->value() != 0;
-    if (g_canvas) {
-        g_canvas->redraw();
-    }
+    if (g_left_canvas) g_left_canvas->redraw();
+    if (g_right_canvas) g_right_canvas->redraw();
 }
 
 } // namespace
@@ -438,38 +548,44 @@ void show_explored_cb(Fl_Widget *widget, void *) {
 int main(int argc, char **argv) {
     Fl_Double_Window win(1220, 820, "Path Planner FLTK Visualizer");
 
-    Fl_Group toolbar(15, 15, 1190, 150);
-    Fl_Button load_btn(15, 15, 110, 32, "Load Map");
-    Fl_Button dijkstra_btn(135, 15, 130, 32, "Run Dijkstra");
-    Fl_Button astar_btn(275, 15, 110, 32, "Run A*");
-    Fl_Button both_btn(395, 15, 110, 32, "Run Both");
-    Fl_Button clear_btn(515, 15, 110, 32, "Clear Paths");
-    Fl_Button random_btn(635, 15, 150, 32, "Random Map");
-    Fl_Float_Input turn_penalty(910, 15, 70, 28, "Turn");
-    Fl_Check_Button show_explored_btn(995, 15, 170, 28, "Show Explored");
+    Fl_Group toolbar(15, 8, 1190, 65);
+    Fl_Button load_btn(15, 8, 95, 22, "Load Map");
+    Fl_Button dijkstra_btn(120, 8, 115, 22, "Run Dijkstra");
+    Fl_Button astar_btn(245, 8, 95, 22, "Run A*");
+    Fl_Button both_btn(350, 8, 95, 22, "Run Both");
+    Fl_Button clear_btn(455, 8, 95, 22, "Clear Paths");
+    Fl_Button random_btn(560, 8, 120, 22, "Random Map");
+    Fl_Float_Input turn_penalty(690, 8, 60, 22, "Turn");
+    Fl_Check_Button show_explored_btn(760, 8, 150, 22, "Show Explored");
 
-    Fl_Int_Input start_x(15, 65, 70, 28, "Start X");
-    Fl_Int_Input start_y(100, 65, 70, 28, "Start Y");
-    Fl_Int_Input target_x(215, 65, 70, 28, "Target X");
-    Fl_Int_Input target_y(300, 65, 70, 28, "Target Y");
-
-    Fl_Multiline_Output stats(395, 60, 300, 85, "Stats");
-    stats.value("Load a map to begin.");
-
-    Fl_Box hint(720, 55, 460, 90,
-                "Green = start, red = target, blue/orange = paths\n"
-                "Pale cells show explored nodes, blue-tinted cells mean low cost.");
-    hint.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT);
-
+    Fl_Int_Input start_x(15, 38, 55, 22, "Start X");
+    Fl_Int_Input start_y(80, 38, 55, 22, "Start Y");
+    Fl_Int_Input target_x(180, 38, 55, 22, "Target X");
+    Fl_Int_Input target_y(245, 38, 55, 22, "Target Y");
     toolbar.end();
 
-    g_canvas = new MapCanvas(15, 180, 1190, 625);
+    Fl_Multiline_Output *left_stats = new Fl_Multiline_Output(15, 80, 330, 130, "");
+    left_stats->box(FL_UP_BOX);
+    left_stats->value("");
+    Fl_Multiline_Output *right_stats = new Fl_Multiline_Output(355, 80, 330, 130, "");
+    right_stats->box(FL_UP_BOX);
+    right_stats->value("");
+    Fl_Box *compare = new Fl_Box(695, 80, 510, 130, "Load a map to begin.");
+    compare->box(FL_FLAT_BOX);
+    compare->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT);
+
+    g_left_canvas = new MapCanvas(15, 220, 380, 360);
+    g_right_canvas = new MapCanvas(405, 220, 400, 360);
+    g_left_plot = new PlotWidget(15, 590, 380, 130);
+    g_right_plot = new PlotWidget(405, 590, 400, 130);
+    g_left_stats_box = left_stats;
+    g_right_stats_box = right_stats;
+    g_compare_box = compare;
     g_start_x = &start_x;
     g_start_y = &start_y;
     g_target_x = &target_x;
     g_target_y = &target_y;
     g_turn_penalty_input = &turn_penalty;
-    g_stats = &stats;
 
     syncTurnPenaltyInput(turnPenalty());
 
@@ -483,7 +599,7 @@ int main(int argc, char **argv) {
     show_explored_btn.callback(show_explored_cb);
 
     win.end();
-    win.resizable(g_canvas);
+    win.resizable(g_left_canvas);
     win.show(argc, argv);
 
     if (argc >= 2) {

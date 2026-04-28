@@ -48,6 +48,9 @@ bool DijkstraPlanner::plan(const Map &map, const Point &s, const Point &t) {
     dist[startState] = 0;
     pq.push({0, startState});
     int expanded = 0;
+    const int SAMPLE_INTERVAL = 10;
+    std::vector<Stats::ProgressSample> samples;
+    int maxOpen = 0;
     auto t0 = std::chrono::high_resolution_clock::now();
     while(!pq.empty()){
         auto [d, state] = pq.top(); pq.pop();
@@ -73,6 +76,14 @@ bool DijkstraPlanner::plan(const Map &map, const Point &s, const Point &t) {
                 pq.push({nd, nextState});
             }
         }
+        // record open size and occasional sample
+        const int openSize = static_cast<int>(pq.size());
+        if (openSize > maxOpen) maxOpen = openSize;
+        if ((expanded % SAMPLE_INTERVAL) == 0) {
+            auto tnow = std::chrono::high_resolution_clock::now();
+            double elapsed = std::chrono::duration<double, std::milli>(tnow - t0).count();
+            samples.push_back({elapsed, expanded, openSize});
+        }
     }
     auto t1 = std::chrono::high_resolution_clock::now();
     stats.time_ms = std::chrono::duration<double, std::milli>(t1-t0).count();
@@ -94,5 +105,7 @@ bool DijkstraPlanner::plan(const Map &map, const Point &s, const Point &t) {
     path = reconstructPath(bestState, parent, w);
     stats.path_length = bestCost;
     stats.path_cost = bestCost;
+    stats.max_open_size = maxOpen;
+    stats.samples = std::move(samples);
     return true;
 }

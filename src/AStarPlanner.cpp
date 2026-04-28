@@ -49,6 +49,9 @@ bool AStarPlanner::plan(const Map &map, const Point &s, const Point &t){
     f[startState] = heuristic(s, t, minCost);
     open.push({f[startState], startState});
     int expanded = 0;
+    const int SAMPLE_INTERVAL = 10;
+    std::vector<Stats::ProgressSample> samples;
+    int maxOpen = 0;
     auto t0 = std::chrono::high_resolution_clock::now();
     while(!open.empty()){
         auto [fv, state] = open.top(); open.pop();
@@ -75,6 +78,14 @@ bool AStarPlanner::plan(const Map &map, const Point &s, const Point &t){
                 open.push({f[nextState], nextState});
             }
         }
+        // record open size and occasional sample
+        const int openSize = static_cast<int>(open.size());
+        if (openSize > maxOpen) maxOpen = openSize;
+        if ((expanded % SAMPLE_INTERVAL) == 0) {
+            auto tnow = std::chrono::high_resolution_clock::now();
+            double elapsed = std::chrono::duration<double, std::milli>(tnow - t0).count();
+            samples.push_back({elapsed, expanded, openSize});
+        }
     }
     auto t1 = std::chrono::high_resolution_clock::now();
     stats.time_ms = std::chrono::duration<double, std::milli>(t1-t0).count();
@@ -96,5 +107,7 @@ bool AStarPlanner::plan(const Map &map, const Point &s, const Point &t){
     path = reconstructPath(bestState, parent, w);
     stats.path_length = bestCost;
     stats.path_cost = bestCost;
+    stats.max_open_size = maxOpen;
+    stats.samples = std::move(samples);
     return true;
 }
