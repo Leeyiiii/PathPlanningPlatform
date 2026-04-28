@@ -555,13 +555,13 @@ int main(int argc, char **argv) {
     Fl_Button both_btn(350, 8, 95, 22, "Run Both");
     Fl_Button clear_btn(455, 8, 95, 22, "Clear Paths");
     Fl_Button random_btn(560, 8, 120, 22, "Random Map");
-    Fl_Float_Input turn_penalty(690, 8, 60, 22, "Turn");
-    Fl_Check_Button show_explored_btn(760, 8, 150, 22, "Show Explored");
 
     Fl_Int_Input start_x(15, 38, 55, 22, "Start X");
     Fl_Int_Input start_y(80, 38, 55, 22, "Start Y");
     Fl_Int_Input target_x(180, 38, 55, 22, "Target X");
     Fl_Int_Input target_y(245, 38, 55, 22, "Target Y");
+    Fl_Float_Input turn_penalty(315, 38, 60, 22, "Turn");
+    Fl_Check_Button show_explored_btn(385, 38, 150, 22, "Show Explored");
     toolbar.end();
 
     Fl_Multiline_Output *left_stats = new Fl_Multiline_Output(15, 80, 330, 130, "");
