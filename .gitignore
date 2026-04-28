@@ -1,0 +1,16 @@
+# 编译输出
+bin/
+build/
+*.exe
+*.out
+*.o
+
+# VSCode 配置
+.vscode/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log

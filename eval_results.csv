@@ -1,0 +1,13 @@
+map,algorithm,success,time_ms,nodes,path_cost
+example_map.txt,Dijkstra,1,1.005,38,8.5
+example_map.txt,AStar,1,0,18,8.5
+empty_map.txt,Dijkstra,1,0,74,8.5
+empty_map.txt,AStar,1,0,40,8.5
+single_obstacle.txt,Dijkstra,1,0,60,8.5
+single_obstacle.txt,AStar,1,0,30,8.5
+maze_map.txt,Dijkstra,1,0,95,21
+maze_map.txt,AStar,1,0,20,21
+no_path.txt,Dijkstra,1,0,28,8.5
+no_path.txt,AStar,1,0.993,16,8.5
+random_large.txt,Dijkstra,1,10.253,5470,106.5
+random_large.txt,AStar,1,6.932,2826,106.5
